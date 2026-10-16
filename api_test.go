@@ -2,7 +2,6 @@ package payriff
 
 import (
 	"errors"
-	"strings"
 	"testing"
 	"time"
 )
@@ -130,56 +129,6 @@ func TestOrdersRefundCompleteExpire(t *testing.T) {
 	mustJSONEqual(t, `{"orderId":"ORD-1","amount":7.5}`, m.last(t).Body)
 
 	mustInvalid(t, c.Orders.Refund(ctx, &RefundParams{}), "orderID is required")
-}
-
-func TestDirectPayEncryptsCardAndSendsSecretKey(t *testing.T) {
-	m := newMockServer(t)
-	m.stub("POST", "/api/v3/directPay", 200, nil, okBody(`{"orderId":"ORD-1","threeDS":true,"redirect":true,
-		"redirectUrl":"https://acs.bank/3ds","transactionResponse":{"status":"CREATED","requestRrn":"req-1"}}`))
-
-	resp, err := m.client(t, WithCardEncryptionKey(publicKeyBase64(t))).Payments.DirectPay(ctx, &DirectPayParams{
-		Amount:      1,
-		Description: "Order #1",
-		CallbackURL: "https://shop.az/cb",
-		CardSave:    true,
-		RequestRRN:  "rrn-1",
-		Card:        Card{PAN: "4169741330151979", CardHolder: "JOHN DOE", ExpiryMonth: "11", ExpiryYear: "2027", CVV: "123"},
-	})
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	sent := m.last(t)
-	if sent.Headers.Get("X-REQUEST-RRN") != "rrn-1" || strings.Contains(string(sent.Body), "4169741330151979") || strings.Contains(string(sent.Body), "JOHN DOE") {
-		t.Fatalf("unexpected request %s", sent.Body)
-	}
-	b := sent.JSON(t)
-	pd := b["paymentData"].(map[string]any)
-	delete(b, "paymentData")
-	if pd["paymentWay"] != "DIRECT" || pd["cardSave"] != true {
-		t.Fatalf("paymentData %v", pd)
-	}
-	if b["amount"] != 1.0 || b["operation"] != "PURCHASE" || b["currency"] != "AZN" || b["description"] != "Order #1" || b["callbackUrl"] != "https://shop.az/cb" || len(b) != 5 {
-		t.Fatalf("body %v", b)
-	}
-	got := decrypt(t, sent.Headers.Get("x-secret-key"), pd["encryptedMessage"].(string))
-	if string(got) != `{"pan":"4169741330151979","cardHolder":"JOHN DOE","expiryYear":"2027","expiryMonth":"11","cvv":"123"}` {
-		t.Fatalf("card %s", got)
-	}
-	if resp.OrderID != "ORD-1" || !resp.Redirect || resp.RedirectURL != "https://acs.bank/3ds" || resp.Transaction.Status != "CREATED" {
-		t.Fatalf("got %+v", resp)
-	}
-}
-
-func TestDirectPayValidatesCardBeforeSending(t *testing.T) {
-	m := newMockServer(t)
-
-	_, err := m.client(t).Payments.DirectPay(ctx, &DirectPayParams{Amount: 1, Description: "x", Card: Card{PAN: "4169"}})
-
-	mustInvalid(t, err, "pan must contain 12-19 digits")
-	if m.count() != 0 {
-		t.Fatal("request was sent")
-	}
 }
 
 func TestAutoPaySendsExplicitCurrencyAndOneClickFlag(t *testing.T) {
@@ -419,5 +368,64 @@ func TestParseOrderCallback(t *testing.T) {
 		if _, err := ParseOrderCallback([]byte(bad)); !isInvalid(err) {
 			t.Fatalf("%q: got %v", bad, err)
 		}
+	}
+}
+
+func TestRegionsMapToBaseURLAndCurrency(t *testing.T) {
+	if RegionAzerbaijan.BaseURL() != "https://api.payriff.com" || RegionAzerbaijan.Currency() != CurrencyAZN {
+		t.Fatal("azerbaijan")
+	}
+	if RegionSaudi.BaseURL() != "https://api.gccpay.sa" || RegionSaudi.Currency() != CurrencySAR {
+		t.Fatal("saudi")
+	}
+	c, err := NewClient("k", WithRegion(RegionSaudi))
+	if err != nil || c.Orders.t.baseURL != "https://api.gccpay.sa" {
+		t.Fatalf("got %v", err)
+	}
+	c, err = NewClient("k")
+	if err != nil || c.Orders.t.baseURL != "https://api.payriff.com" {
+		t.Fatalf("got %v", err)
+	}
+	_, err = NewClient("k", WithRegion("ksa"))
+	mustInvalid(t, err, "unknown region: ksa")
+}
+
+func TestSaudiDefaultsToSAR(t *testing.T) {
+	m := newMockServer(t)
+	m.stub("POST", "/api/v3/orders", 200, nil, okBody(`{"orderId":"ORD-1"}`))
+	m.stub("POST", "/api/v3/autoPay", 200, nil, okBody(`{"orderId":"ORD-2"}`))
+	m.stub("POST", "/api/v2/invoices", 200, nil, okBody(`{"invoiceUuid":"inv-1"}`))
+	c := m.client(t, WithRegion(RegionSaudi))
+
+	if _, err := c.Orders.Create(ctx, &CreateOrderParams{Amount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.last(t).JSON(t)["currency"]; got != "SAR" {
+		t.Fatalf("orders currency %v", got)
+	}
+	if _, err := c.Payments.AutoPay(ctx, &AutoPayParams{CardUUID: "card-1", Amount: 1, Description: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.last(t).JSON(t)["currency"]; got != "SAR" {
+		t.Fatalf("autoPay currency %v", got)
+	}
+	if _, err := c.Invoices.Create(ctx, &InvoiceCreateParams{Amount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.last(t).JSON(t)["body"].(map[string]any)["currencyType"]; got != "SAR" {
+		t.Fatalf("invoice currency %v", got)
+	}
+}
+
+func TestExplicitCurrencyWinsOverRegion(t *testing.T) {
+	m := newMockServer(t)
+	m.stub("POST", "/api/v3/orders", 200, nil, okBody(`{"orderId":"ORD-1"}`))
+
+	if _, err := m.client(t, WithRegion(RegionSaudi)).Orders.Create(ctx, &CreateOrderParams{Amount: 1, Currency: CurrencyUSD}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := m.last(t).JSON(t)["currency"]; got != "USD" {
+		t.Fatalf("currency %v", got)
 	}
 }

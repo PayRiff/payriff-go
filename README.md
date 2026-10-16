@@ -1,11 +1,11 @@
 # Payriff Go SDK
 
-Go client for the Payriff merchant API: orders, direct (host-to-host) card payments, saved cards,
+Go client for the Payriff merchant API: orders, saved-card payments, saved cards,
 transactions, payouts and invoices.
 
 - Go 1.22 or newer
 - No dependencies outside the standard library
-- Talks to `https://api.payriff.com`
+- Talks to `https://api.payriff.com` (Azerbaijan) or `https://api.gccpay.sa` (Saudi Arabia)
 
 ## Installation
 
@@ -55,16 +55,31 @@ so you can cancel it or set a deadline.
 | `WithTimeout(d)` | 60 s | Total request timeout. Bank operations can take tens of seconds. |
 | `WithConnectTimeout(d)` | 10 s | TCP connect timeout. |
 | `WithHTTPClient(c)` | — | Use your own `*http.Client` (proxy, TLS, tracing). The SDK copies it and disables redirects on the copy. |
-| `WithCardEncryptionKey(k)` | built-in Payriff key | Only if Payriff rotates the card-encryption key. Base64 or PEM. |
+| `WithRegion(r)` | `payriff.RegionAzerbaijan` | API region. Sets the base URL and the default currency. |
+| `WithBaseURL(u)` | from the region | Override the API URL, e.g. for testing. The currency still comes from the region. |
 
 Keep the app key in an environment variable or secret store. Never commit it.
+
+### Saudi Arabia
+
+```go
+client, err := payriff.NewClient(os.Getenv("PAYRIFF_APP_KEY"), payriff.WithRegion(payriff.RegionSaudi))
+```
+
+| Region | API | Default currency |
+|---|---|---|
+| `payriff.RegionAzerbaijan` | `https://api.payriff.com` | `AZN` |
+| `payriff.RegionSaudi` | `https://api.gccpay.sa` | `SAR` |
+
+Use the app key from the dashboard of the same region (`dashboard.gccpay.sa` for Saudi Arabia).
+A `Currency` set on a request always wins over the region default.
 
 ## Orders
 
 ```go
 created, err := client.Orders.Create(ctx, &payriff.CreateOrderParams{
 	Amount:      25,
-	Currency:    payriff.CurrencyAZN,        // default AZN
+	Currency:    payriff.CurrencyAZN,        // default: the region currency
 	Operation:   payriff.OperationPreAuth,   // default PURCHASE
 	Language:    payriff.LanguageAZ,
 	Description: "Booking #77",
@@ -86,43 +101,10 @@ receiptPDF, err := client.Orders.DownloadReceipt(ctx, created.OrderID)
 `PaymentPreAuthApproved` or `PaymentRefunded`. Values this SDK version does not know yet are passed
 through unchanged.
 
-Amounts are `float64` in major units (`10.5` = 10.50 AZN). Optional booleans are pointers; use
+Amounts are `float64` in major units (`10.5` = 10.50 AZN or SAR). Optional booleans are pointers; use
 `payriff.Bool(true)`.
 
-## Direct payments (host-to-host)
-
-You collect the card details yourself, and the SDK encrypts them before sending
-(AES-256-GCM + RSA-OAEP). Raw card data never leaves your server in clear text, but your
-systems still handle card data, so PCI DSS requirements apply to you.
-
-```go
-result, err := client.Payments.DirectPay(ctx, &payriff.DirectPayParams{
-	Amount:      1,
-	Description: "Order #1002",
-	CallbackURL: "https://shop.example/payriff/callback",
-	RequestRRN:  "order-1002",
-	Card: payriff.Card{
-		PAN:         "4169 7413 3015 1979",
-		CardHolder:  "JOHN DOE",
-		ExpiryMonth: "11",
-		ExpiryYear:  "27",
-		CVV:         "123",
-	},
-})
-if err != nil {
-	return err
-}
-if result.Redirect {
-	// 3-D Secure: send the customer's browser to result.RedirectURL.
-	// The final status arrives via your callback or client.Orders.Get(ctx, result.OrderID).
-}
-```
-
-The SDK strips spaces and dashes from the card number, pads the month (`1` → `01`), expands a 2-digit
-year (`27` → `2027`) and rejects malformed values before any network call. A `payriff.Card` prints,
-logs (`slog`) and marshals to JSON with a masked number and no CVV.
-
-### Charging a saved card
+## Charging a saved card
 
 ```go
 charge, err := client.Payments.AutoPay(ctx, &payriff.AutoPayParams{

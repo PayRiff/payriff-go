@@ -34,19 +34,6 @@ type CompleteParams struct {
 	CallbackURL string
 }
 
-type DirectPayParams struct {
-	Amount       float64
-	Description  string
-	Card         Card
-	Operation    Operation
-	Currency     Currency
-	CallbackURL  string
-	ThreeDS      *bool
-	CustomFields map[string]string
-	CardSave     bool
-	RequestRRN   string
-}
-
 type AutoPayParams struct {
 	CardUUID        string
 	Amount          float64

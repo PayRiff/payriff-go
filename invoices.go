@@ -3,7 +3,8 @@ package payriff
 import "context"
 
 type InvoicesService struct {
-	t *transport
+	t        *transport
+	currency Currency
 }
 
 func (s *InvoicesService) Create(ctx context.Context, p *InvoiceCreateParams) (*Invoice, error) {
@@ -13,7 +14,7 @@ func (s *InvoicesService) Create(ctx context.Context, p *InvoiceCreateParams) (*
 	if !p.AmountDynamic && p.Amount <= 0 {
 		return nil, invalid("amount is required")
 	}
-	b := body{"currencyType": orDefault(p.Currency, CurrencyAZN)}.
+	b := body{"currencyType": orDefault(p.Currency, s.currency)}.
 		set("amount", p.Amount).
 		set("amountDynamic", p.AmountDynamic).
 		set("languageType", p.Language).

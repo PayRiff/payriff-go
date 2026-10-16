@@ -3,7 +3,8 @@ package payriff
 import "context"
 
 type OrdersService struct {
-	t *transport
+	t        *transport
+	currency Currency
 }
 
 func (s *OrdersService) Create(ctx context.Context, p *CreateOrderParams) (*CreateOrderResponse, error) {
@@ -13,7 +14,7 @@ func (s *OrdersService) Create(ctx context.Context, p *CreateOrderParams) (*Crea
 	if err := positive(p.Amount, "amount"); err != nil {
 		return nil, err
 	}
-	b := body{"amount": p.Amount, "currency": orDefault(p.Currency, CurrencyAZN), "operation": orDefault(p.Operation, OperationPurchase)}.
+	b := body{"amount": p.Amount, "currency": orDefault(p.Currency, s.currency), "operation": orDefault(p.Operation, OperationPurchase)}.
 		set("language", p.Language).
 		set("description", p.Description).
 		set("callbackUrl", p.CallbackURL).

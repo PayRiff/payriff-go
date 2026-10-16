@@ -61,7 +61,10 @@ func (s *PayoutsService) GetByRequestRRN(ctx context.Context, requestRRN string)
 	return &out, nil
 }
 
-var sixteenDigits = regexp.MustCompile(`^[0-9]{16}$`)
+var (
+	separators    = regexp.MustCompile(`[\s-]`)
+	sixteenDigits = regexp.MustCompile(`^[0-9]{16}$`)
+)
 
 func (s *PayoutsService) CheckCardholder(ctx context.Context, cardPAN string) (string, error) {
 	pan := separators.ReplaceAllString(cardPAN, "")

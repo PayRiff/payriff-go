@@ -239,9 +239,6 @@ func TestClientValidation(t *testing.T) {
 	_, err := NewClient("  ")
 	mustInvalid(t, err, "app key is required")
 
-	_, err = NewClient("k", WithCardEncryptionKey("not-a-key"))
-	mustInvalid(t, err, "invalid RSA public key")
-
 	c, err := NewClient("k")
 	if err != nil || c.Orders == nil || c.Payments == nil || c.Cards == nil || c.Transactions == nil || c.Payouts == nil || c.Invoices == nil {
 		t.Fatalf("got %+v, %v", c, err)

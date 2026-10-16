@@ -1,17 +1,40 @@
 package payriff
 
 import (
-	"crypto/rsa"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 )
 
+const Version = "0.2.0"
+
+type Region string
+
 const (
-	Version       = "0.1.0"
-	ProductionURL = "https://api.payriff.com"
+	RegionAzerbaijan Region = "azerbaijan"
+	RegionSaudi      Region = "saudi"
 )
+
+func (r Region) BaseURL() string {
+	switch r {
+	case RegionAzerbaijan:
+		return "https://api.payriff.com"
+	case RegionSaudi:
+		return "https://api.gccpay.sa"
+	}
+	return ""
+}
+
+func (r Region) Currency() Currency {
+	switch r {
+	case RegionAzerbaijan:
+		return CurrencyAZN
+	case RegionSaudi:
+		return CurrencySAR
+	}
+	return ""
+}
 
 type Client struct {
 	Orders       *OrdersService
@@ -23,12 +46,12 @@ type Client struct {
 }
 
 type config struct {
-	merchantID        string
-	timeout           time.Duration
-	connectTimeout    time.Duration
-	cardEncryptionKey string
-	baseURL           string
-	httpClient        *http.Client
+	merchantID     string
+	timeout        time.Duration
+	connectTimeout time.Duration
+	region         Region
+	baseURL        string
+	httpClient     *http.Client
 }
 
 type Option func(*config)
@@ -45,8 +68,8 @@ func WithConnectTimeout(timeout time.Duration) Option {
 	return func(c *config) { c.connectTimeout = timeout }
 }
 
-func WithCardEncryptionKey(base64OrPEM string) Option {
-	return func(c *config) { c.cardEncryptionKey = base64OrPEM }
+func WithRegion(region Region) Option {
+	return func(c *config) { c.region = region }
 }
 
 func WithHTTPClient(httpClient *http.Client) Option {
@@ -62,10 +85,9 @@ func NewClient(appKey string, opts ...Option) (*Client, error) {
 		return nil, invalid("app key is required")
 	}
 	cfg := config{
-		timeout:           60 * time.Second,
-		connectTimeout:    10 * time.Second,
-		cardEncryptionKey: productionCardEncryptionKey,
-		baseURL:           ProductionURL,
+		timeout:        60 * time.Second,
+		connectTimeout: 10 * time.Second,
+		region:         RegionAzerbaijan,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -73,9 +95,11 @@ func NewClient(appKey string, opts ...Option) (*Client, error) {
 	if cfg.timeout <= 0 || cfg.connectTimeout <= 0 {
 		return nil, invalid("timeouts must be positive")
 	}
-	key, err := parsePublicKey(cfg.cardEncryptionKey)
-	if err != nil {
-		return nil, err
+	if cfg.region.BaseURL() == "" {
+		return nil, invalid("unknown region: " + string(cfg.region))
+	}
+	if cfg.baseURL == "" {
+		cfg.baseURL = cfg.region.BaseURL()
 	}
 	t := &transport{
 		baseURL:    strings.TrimRight(cfg.baseURL, "/"),
@@ -83,7 +107,7 @@ func NewClient(appKey string, opts ...Option) (*Client, error) {
 		merchantID: cfg.merchantID,
 		httpClient: httpClient(cfg),
 	}
-	return newClient(t, key), nil
+	return newClient(t, cfg.region.Currency()), nil
 }
 
 func httpClient(cfg config) *http.Client {
@@ -97,13 +121,13 @@ func httpClient(cfg config) *http.Client {
 	return &http.Client{Transport: base, Timeout: cfg.timeout, CheckRedirect: noRedirect}
 }
 
-func newClient(t *transport, key *rsa.PublicKey) *Client {
+func newClient(t *transport, currency Currency) *Client {
 	return &Client{
-		Orders:       &OrdersService{t: t},
-		Payments:     &PaymentsService{t: t, key: key},
+		Orders:       &OrdersService{t: t, currency: currency},
+		Payments:     &PaymentsService{t: t, currency: currency},
 		Cards:        &CardsService{t: t},
 		Transactions: &TransactionsService{t: t},
 		Payouts:      &PayoutsService{t: t},
-		Invoices:     &InvoicesService{t: t},
+		Invoices:     &InvoicesService{t: t, currency: currency},
 	}
 }
